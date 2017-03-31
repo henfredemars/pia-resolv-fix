@@ -5,11 +5,55 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/inotify.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <syslog.h>
+#include <errno.h>
 
-#define RESOLV_PATH "/etc/resolv.conf"
 #define RESOLV_SYM_PATH "/run/resolvconf/resolv.conf"
+#define RESOLV_PATH "/etc/resolv.conf"
+#define RESOLV_PPATH "/etc"
+
+int make_pid_file(const char* path)
+{
+  FILE* fd = fopen(path, "w");
+  if (fd) {
+    fprintf(fd, "%ld", (long)getpid());
+    fclose(fd);
+    return 0;
+  }
+  perror("Failed to write pid file");
+  return -1;
+}
+
+int do_fork()
+{
+  const pid_t fpid = fork();
+  if (fpid < 0) {
+    perror("Failed to fork()");
+    return -1;
+  } else if (fpid > 0) {
+    // parent, you can exit
+    exit(0);
+  }
+
+  return 0;
+}
+
+void daemonize()
+{
+  do_fork();
+  if (setsid() < 0)
+    perror("Failed to setsid()");
+
+  // old tyme double-fork magic
+  do_fork();
+
+  if (chdir("/"))
+    perror("Failed to free working directory");
+  close(STDIN_FILENO);
+}
 
 pid_t proc_find_cmdline(const char* phrase)
 {
@@ -20,8 +64,8 @@ pid_t proc_find_cmdline(const char* phrase)
   // open /proc
   dir = opendir("/proc");
   if (!dir) {
-    perror("Error opening /proc");
-    return 1;
+    syslog(LOG_ERR, "Error opening /proc");
+    return -1;
   }
 
   // look for pid
@@ -55,34 +99,129 @@ pid_t proc_find_cmdline(const char* phrase)
 }
 
 
-int openvpn_running()
+int pia_running()
 {
-  return proc_find_cmdline("openvpn") >= 0;
+  return proc_find_cmdline("pia_manager") >= 0;
 }
 
-int main()
+void handle_arguments(int argc, char** argv)
 {
-  struct stat r_stat;
+  int c;
+  int want_daemonize = 0;
+  int want_pid_file = 0;
+  char pid_buf[1024];
 
-  // stat resolv.conf
-  if (lstat(RESOLV_PATH, &r_stat)) {
-    perror("Failed to stat resolv.conf");
-    return 1;
-  }
-
-  if (!S_ISLNK(r_stat.st_mode)) {
-    if (!openvpn_running()) {
-      // assume leftover resolv.conf
-      if (remove(RESOLV_PATH)) {
-        perror("Failed to remove real file resolv.conf");
-        return 2;
-      }
-      if (symlink(RESOLV_SYM_PATH, RESOLV_PATH)) {
-        perror("Failed to create symlink to dynamic resolv.conf");
-        return 3;
-      }
+  while ((c = getopt(argc, argv, "dp:")) > 0) {
+    if (c == 'd') {
+      want_daemonize = 1;
+    } else if (c == 'p') {
+      if (snprintf(pid_buf, sizeof(pid_buf), "%s", optarg))
+        want_pid_file = 1;
+    } else if (c == '?') {
+      if (optopt == 'p')
+        fprintf(stderr, "Option 'p' requires an argument\n");
+      else
+        fprintf(stderr, "Unknown option '%c'\n", optopt);
+      exit(1);
+    } else {
+      fprintf(stderr, "Unexpected getopt() result shouldn't happen\n");
+      exit(1);
     }
   }
+
+  if (want_daemonize)
+    daemonize();
+  if (want_pid_file)
+    make_pid_file(pid_buf);
+
+  syslog(LOG_INFO, "Parsed arguments: daemon=%d, pid_file=%d", want_daemonize,
+    want_pid_file);
+}
+
+void fix_symlink()
+{
+  syslog(LOG_INFO, "Restoring symlink to %s", RESOLV_SYM_PATH);
+  if (remove(RESOLV_PATH))
+    if (errno != ENOENT)
+      syslog(LOG_ERR, "Failed to remove existing file resolv.conf");
+  if (symlink(RESOLV_SYM_PATH, RESOLV_PATH))
+    syslog(LOG_ERR, "Failed to create symlink to dynamic resolv.conf");
+}
+
+void check_resolv()
+{
+  syslog(LOG_INFO, "Check resolv status prompted by inotify");
+  struct stat r_stat;
+  int pia = pia_running();
+
+  if (lstat(RESOLV_PATH, &r_stat)) {
+    if (!pia) {
+      syslog(LOG_INFO,
+        "Failed to stat. Trying to fix because PIA is not running right now...");
+      fix_symlink();
+    }
+  } else {
+    if (S_ISLNK(r_stat.st_mode))
+      if (pia)
+        syslog(LOG_NOTICE, "Bug? Symlink exists but PIA is running. Weird...");
+      else
+        syslog(LOG_INFO, "All good, symlink and PIA isn't running");
+    else
+      if (pia)
+        syslog(LOG_INFO, "All good, not a symlink and PIA is running");
+      else
+        fix_symlink();
+  }
+}
+
+void watch_resolv()
+{
+  int fd;
+  if ((fd = inotify_init()) < 0) {
+    syslog(LOG_ERR, "Failed to create inotify instance");
+    exit(1);
+  }
+
+  int wd;
+  if ((wd = inotify_add_watch(fd, RESOLV_PPATH, IN_CREATE | IN_DELETE)) < 0) {
+    syslog(LOG_ERR, "Failed to inotify_add_watch");
+    close(fd);
+    exit(1);
+  }
+
+  size_t buf_size = sizeof(struct inotify_event) + NAME_MAX + 1;
+  syslog(LOG_INFO, "Allocating event buffer of %ld bytes", (long)buf_size);
+  union {
+    struct inotify_event ie;
+    char ia[buf_size];
+  } event_buf;
+  syslog(LOG_INFO, "Begun monitoring %s/resolv.conf for changes", RESOLV_PPATH);
+  int read_status;
+  while ((read_status = read(fd, event_buf.ia, buf_size)) > 0) {
+    if (event_buf.ie.mask & IN_IGNORED) {
+      syslog(LOG_ERR, "Kernel removed our watch! Terminating...");
+      exit(1);
+    } else if (event_buf.ie.mask & IN_Q_OVERFLOW) {
+      syslog(LOG_WARNING, "Kernel event queue overflow detected");
+      check_resolv();
+    } else if (strcmp(event_buf.ie.name, "resolv.conf") == 0) {
+      check_resolv();
+    }
+  }
+
+  fprintf(stderr, "Got unexpected %d on inotify read\n", read_status);
+  close(fd);
+
+  return;
+}
+
+int main(int argc, char** argv)
+{
+  openlog("pia-resolv-fix", LOG_PID, LOG_DAEMON);
+  syslog(LOG_INFO, "Launching pia-resolv-fix");
+  handle_arguments(argc, argv);
+  check_resolv();
+  watch_resolv();
 
   return 0;
 
