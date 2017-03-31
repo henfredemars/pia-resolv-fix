@@ -20,6 +20,6 @@ When should I use this?
 dnsmasq[8542]: /etc/resolvconf/update.d/libc: Warning: /etc/resolv.conf is not a symbolic link to /run/resolvconf/resolv.conf
 ```
 
-If you get errors like the above in your syslog, notice a drop in DNS performance, and use Private Internet Access on Ubuntu, 
-this program might improve your DNS performance.
+If you get errors like the above in your syslog while not connected to the VPN, notice a drop in DNS performance, and use 
+Private Internet Access on Ubuntu, this program might improve your DNS performance.
 
