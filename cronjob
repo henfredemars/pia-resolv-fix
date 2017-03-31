@@ -1,0 +1,5 @@
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+@reboot /usr/local/bin/pia-resolv-fix
+*/15 * * * * /usr/local/bin/pia-resolv-fix
