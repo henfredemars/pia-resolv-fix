@@ -101,7 +101,7 @@ pid_t proc_find_cmdline(const char* phrase)
 
 int pia_running()
 {
-  return proc_find_cmdline("pia_manager") >= 0;
+  return proc_find_cmdline("openvpn") >= 0;
 }
 
 void handle_arguments(int argc, char** argv)
@@ -159,6 +159,8 @@ void check_resolv()
       syslog(LOG_INFO,
         "Failed to stat. Trying to fix because PIA is not running right now...");
       fix_symlink();
+    } else {
+      syslog(LOG_INFO, "Cannot stat, assuming PIA must be writing resolv.conf");
     }
   } else {
     if (S_ISLNK(r_stat.st_mode))
