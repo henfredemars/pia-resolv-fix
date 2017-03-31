@@ -1,0 +1,13 @@
+[Unit]
+Description=PIA OpenVPN Resolv Fixup Daemon
+After=network.target
+
+[Service]
+Type=forking
+PIDFile=/var/run/pia-resolv-fix.pid
+ExecStartPre=/bin/rm -f /var/run/pia-resolv-fix.pid
+ExecStart=/usr/local/bin/pia-resolv-fix -d -p /var/run/pia-resolv-fix.pid
+Restart=on-abort
+
+[Install]
+WantedBy=multi-user.target
