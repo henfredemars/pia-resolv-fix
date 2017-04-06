@@ -14,7 +14,7 @@
 #define RESOLV_SYM_PATH "/run/resolvconf/resolv.conf"
 #define RESOLV_PATH "/etc/resolv.conf"
 #define RESOLV_PPATH "/etc"
-#define EVENT_QUEUE_SIZE 8
+#define EVENT_QUEUE_SIZE 4
 #define MAX_EVENT_SIZE (sizeof(struct inotify_event)+NAME_MAX+1)
 
 void* checked_malloc(size_t bytes)
