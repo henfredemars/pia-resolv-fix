@@ -14,6 +14,18 @@
 #define RESOLV_SYM_PATH "/run/resolvconf/resolv.conf"
 #define RESOLV_PATH "/etc/resolv.conf"
 #define RESOLV_PPATH "/etc"
+#define EVENT_QUEUE_SIZE 8
+#define MAX_EVENT_SIZE (sizeof(struct inotify_event)+NAME_MAX+1)
+
+void* checked_malloc(size_t bytes)
+{
+  void* m = malloc(bytes);
+  if (!m) {
+    perror("Malloc failed");
+    abort();
+  }
+  return m;
+}
 
 int make_pid_file(const char* path)
 {
@@ -150,9 +162,8 @@ void fix_symlink()
 
 void check_resolv()
 {
-  syslog(LOG_INFO, "Check resolv status prompted by inotify");
   struct stat r_stat;
-  int pia = pia_running();
+  const int pia = pia_running();
 
   if (lstat(RESOLV_PATH, &r_stat)) {
     if (!pia) {
@@ -191,27 +202,40 @@ void watch_resolv()
     exit(1);
   }
 
-  size_t buf_size = sizeof(struct inotify_event) + NAME_MAX + 1;
-  syslog(LOG_INFO, "Allocating event buffer of %ld bytes", (long)buf_size);
+  const size_t buf_size = EVENT_QUEUE_SIZE*MAX_EVENT_SIZE;
+  const size_t header_size = sizeof(struct inotify_event);
   union {
-    struct inotify_event ie;
-    char ia[buf_size];
-  } event_buf;
+    struct inotify_event e;
+    char padding[MAX_EVENT_SIZE];
+  } padded_event;
+  syslog(LOG_INFO, "Allocating event buffer of %ld bytes", (long)buf_size);
+  char* event_buf = checked_malloc(buf_size);
+
   syslog(LOG_INFO, "Begun monitoring %s/resolv.conf for changes", RESOLV_PPATH);
-  int read_status;
-  while ((read_status = read(fd, event_buf.ia, buf_size)) > 0) {
-    if (event_buf.ie.mask & IN_IGNORED) {
-      syslog(LOG_ERR, "Kernel removed our watch! Terminating...");
-      exit(1);
-    } else if (event_buf.ie.mask & IN_Q_OVERFLOW) {
-      syslog(LOG_WARNING, "Kernel event queue overflow detected");
-      check_resolv();
-    } else if (strcmp(event_buf.ie.name, "resolv.conf") == 0) {
-      check_resolv();
+  size_t bytes_read;
+  while ((bytes_read = read(fd, event_buf, buf_size)) > 0) {
+    if (bytes_read < header_size) break;
+    size_t event_start = 0;
+    while (event_start < bytes_read) {
+      memcpy(&padded_event, event_buf + event_start, header_size);
+      uint32_t len = padded_event.e.len;
+      memcpy(&padded_event+header_size, event_buf+event_start+header_size, len);
+      if (padded_event.e.mask & IN_IGNORED) {
+        syslog(LOG_ERR, "Kernel removed our watch! Terminating...");
+        exit(1);
+      } else if (padded_event.e.mask & IN_Q_OVERFLOW) {
+        syslog(LOG_WARNING, "Kernel event queue overflow detected");
+        check_resolv();
+      } else if (strcmp(padded_event.e.name, "resolv.conf") == 0) {
+        syslog(LOG_INFO, "Check resolv status prompted by inotify");
+        check_resolv();
+      }
+      event_start += header_size + len;
     }
   }
 
-  fprintf(stderr, "Got unexpected %d on inotify read\n", read_status);
+  fprintf(stderr, "Got unexpected %ld on inotify read\n", (long)bytes_read);
+  free(event_buf);
   close(fd);
 
   return;
