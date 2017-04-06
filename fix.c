@@ -14,7 +14,7 @@
 #define RESOLV_SYM_PATH "/run/resolvconf/resolv.conf"
 #define RESOLV_PATH "/etc/resolv.conf"
 #define RESOLV_PPATH "/etc"
-#define EVENT_QUEUE_SIZE 4
+#define EVENT_QUEUE_MIN_SIZE 4
 #define MAX_EVENT_SIZE (sizeof(struct inotify_event)+NAME_MAX+1)
 
 void* checked_malloc(size_t bytes)
@@ -202,7 +202,7 @@ void watch_resolv()
     exit(1);
   }
 
-  const size_t buf_size = EVENT_QUEUE_SIZE*MAX_EVENT_SIZE;
+  const size_t buf_size = EVENT_QUEUE_MIN_SIZE*MAX_EVENT_SIZE;
   const size_t header_size = sizeof(struct inotify_event);
   union {
     struct inotify_event e;
