@@ -224,7 +224,7 @@ void watch_resolv()
         syslog(LOG_ERR, "Kernel removed our watch! Terminating...");
         exit(1);
       } else if (padded_event.e.mask & IN_Q_OVERFLOW) {
-        syslog(LOG_WARNING, "Kernel event queue overflow detected");
+        syslog(LOG_WARNING, "Kernel event queue overflow, forcing check");
         check_resolv();
       } else if (strcmp(padded_event.e.name, "resolv.conf") == 0) {
         syslog(LOG_INFO, "Check resolv status prompted by inotify");
