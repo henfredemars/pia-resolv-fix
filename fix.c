@@ -206,7 +206,7 @@ void watch_resolv()
   const size_t header_size = sizeof(struct inotify_event);
   union {
     struct inotify_event e;
-    char padding[MAX_EVENT_SIZE];
+    char p[MAX_EVENT_SIZE];
   } padded_event;
   syslog(LOG_INFO, "Allocating event buffer of %ld bytes", (long)buf_size);
   char* event_buf = checked_malloc(buf_size);
@@ -217,9 +217,9 @@ void watch_resolv()
     if (bytes_read < header_size) break;
     size_t event_start = 0;
     while (event_start < bytes_read) {
-      memcpy(&padded_event, event_buf + event_start, header_size);
+      memcpy(&padded_event.p, event_buf + event_start, header_size);
       uint32_t len = padded_event.e.len;
-      memcpy(&padded_event+header_size, event_buf+event_start+header_size, len);
+      memcpy(&padded_event.e+header_size, event_buf + event_start + header_size, len);
       if (padded_event.e.mask & IN_IGNORED) {
         syslog(LOG_ERR, "Kernel removed our watch! Terminating...");
         exit(1);
