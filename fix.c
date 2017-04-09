@@ -15,6 +15,7 @@
 #define RESOLV_PATH "/etc/resolv.conf"
 #define RESOLV_PPATH "/etc"
 #define EVENT_QUEUE_MIN_SIZE 4
+#define HEADER_SIZE (sizeof(int)+12)
 #define MAX_EVENT_SIZE (sizeof(struct inotify_event)+NAME_MAX+1)
 
 void* checked_malloc(size_t bytes)
@@ -203,7 +204,6 @@ void watch_resolv()
   }
 
   const size_t buf_size = EVENT_QUEUE_MIN_SIZE*MAX_EVENT_SIZE;
-  const size_t header_size = sizeof(struct inotify_event);
   union {
     struct inotify_event e;
     char p[MAX_EVENT_SIZE];
@@ -214,12 +214,12 @@ void watch_resolv()
   syslog(LOG_INFO, "Begun monitoring %s/resolv.conf for changes", RESOLV_PPATH);
   size_t bytes_read;
   while ((bytes_read = read(fd, event_buf, buf_size)) > 0) {
-    if (bytes_read < header_size) break;
+    if (bytes_read < HEADER_SIZE) break;
     size_t event_start = 0;
     while (event_start < bytes_read) {
-      memcpy(&padded_event.p, event_buf + event_start, header_size);
-      uint32_t len = padded_event.e.len;
-      memcpy(&padded_event.e+header_size, event_buf + event_start + header_size, len);
+      memcpy(padded_event.p, event_buf + event_start, HEADER_SIZE);
+      const uint32_t len = padded_event.e.len;
+      memcpy(padded_event.p+HEADER_SIZE, event_buf + event_start + HEADER_SIZE, len);
       if (padded_event.e.mask & IN_IGNORED) {
         syslog(LOG_ERR, "Kernel removed our watch! Terminating...");
         exit(1);
@@ -230,7 +230,7 @@ void watch_resolv()
         syslog(LOG_INFO, "Check resolv status prompted by inotify");
         check_resolv();
       }
-      event_start += header_size + len;
+      event_start += HEADER_SIZE + len;
     }
   }
 
