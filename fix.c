@@ -14,9 +14,13 @@
 #define RESOLV_SYM_PATH "/run/resolvconf/resolv.conf"
 #define RESOLV_PATH "/etc/resolv.conf"
 #define RESOLV_PPATH "/etc"
-#define EVENT_QUEUE_MIN_SIZE 4
+#define FORMAT_BUF_SIZE 1024
+#define EVENT_BUF_SIZE 1024
 #define HEADER_SIZE (sizeof(int)+12)
 #define MAX_EVENT_SIZE (sizeof(struct inotify_event)+NAME_MAX+1)
+
+char format_buf[FORMAT_BUF_SIZE];
+char event_buf[EVENT_BUF_SIZE];
 
 void* checked_malloc(size_t bytes)
 {
@@ -72,7 +76,6 @@ pid_t proc_find_cmdline(const char* phrase)
 {
   DIR* dir;
   struct dirent* ent;
-  char buf[1024];
 
   // open /proc
   dir = opendir("/proc");
@@ -90,12 +93,12 @@ pid_t proc_find_cmdline(const char* phrase)
       continue;
 
     // try to open cmdline
-    snprintf(buf, sizeof(buf), "/proc/%ld/cmdline", lpid);
-    FILE* fp = fopen(buf, "r");
+    snprintf(format_buf, sizeof(format_buf), "/proc/%ld/cmdline", lpid);
+    FILE* fp = fopen(format_buf, "r");
     if (!fp)
       continue;
-    if (fgets(buf, sizeof(buf), fp) != NULL) {
-      if (strstr(buf, phrase) != NULL) {
+    if (fgets(format_buf, sizeof(format_buf), fp) != NULL) {
+      if (strstr(format_buf, phrase) != NULL) {
         fclose(fp);
         closedir(dir);
         return (pid_t)lpid;
@@ -122,13 +125,12 @@ void handle_arguments(int argc, char** argv)
   int c;
   int want_daemonize = 0;
   int want_pid_file = 0;
-  char pid_buf[1024];
 
   while ((c = getopt(argc, argv, "dp:")) > 0) {
     if (c == 'd') {
       want_daemonize = 1;
     } else if (c == 'p') {
-      if (snprintf(pid_buf, sizeof(pid_buf), "%s", optarg))
+      if (snprintf(format_buf, sizeof(format_buf), "%s", optarg))
         want_pid_file = 1;
     } else if (c == '?') {
       if (optopt == 'p')
@@ -145,7 +147,7 @@ void handle_arguments(int argc, char** argv)
   if (want_daemonize)
     daemonize();
   if (want_pid_file)
-    make_pid_file(pid_buf);
+    make_pid_file(format_buf);
 
   syslog(LOG_INFO, "Parsed arguments: daemon=%d, pid_file=%d", want_daemonize,
     want_pid_file);
@@ -203,17 +205,15 @@ void watch_resolv()
     exit(1);
   }
 
-  const size_t buf_size = EVENT_QUEUE_MIN_SIZE*MAX_EVENT_SIZE;
   union {
     struct inotify_event e;
     char p[MAX_EVENT_SIZE];
   } padded_event;
-  syslog(LOG_INFO, "Allocating event buffer of %ld bytes", (long)buf_size);
-  char* event_buf = checked_malloc(buf_size);
+  syslog(LOG_INFO, "Using static event buffer of %ld bytes", (long)EVENT_BUF_SIZE);
 
   syslog(LOG_INFO, "Begun monitoring %s/resolv.conf for changes", RESOLV_PPATH);
   size_t bytes_read;
-  while ((bytes_read = read(fd, event_buf, buf_size)) > 0) {
+  while ((bytes_read = read(fd, event_buf, EVENT_BUF_SIZE)) > 0) {
     if (bytes_read < HEADER_SIZE) break;
     size_t event_start = 0;
     while (event_start < bytes_read) {
@@ -235,7 +235,6 @@ void watch_resolv()
   }
 
   fprintf(stderr, "Got unexpected %ld on inotify read\n", (long)bytes_read);
-  free(event_buf);
   close(fd);
 
   return;
